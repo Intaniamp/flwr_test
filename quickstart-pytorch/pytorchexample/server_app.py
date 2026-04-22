@@ -20,6 +20,7 @@ def main(grid: Grid, context: Context) -> None:
     num_rounds: int = context.run_config["num-server-rounds"]
     lr: float = context.run_config["learning-rate"]
     fraction_train: float = context.run_config["franction-train"]
+    dataset_path: str = context.run_config["dataset-path"]
 
     # Load global model
     global_model = Net()
@@ -29,9 +30,9 @@ def main(grid: Grid, context: Context) -> None:
     strategy = FedAvg(
         fraction_train=fraction_train,
         fraction_evaluate=fraction_evaluate,
-        min_train_nodes=20,
-        min_evaluate_nodes=40,
-        min_available_nodes=1000,
+        min_train_nodes=2,
+        min_evaluate_nodes=2,
+        min_available_nodes=10,
     )
 
     # Start strategy, run FedAvg for `num_rounds`
@@ -40,7 +41,9 @@ def main(grid: Grid, context: Context) -> None:
         initial_arrays=arrays,
         train_config=ConfigRecord({"lr": lr}),
         num_rounds=num_rounds,
-        evaluate_fn=global_evaluate,
+        evaluate_fn=lambda server_round, arrays: global_evaluate(
+            server_round, arrays, dataset_path=dataset_path
+        ),
     )
 
     # Save final model to disk
