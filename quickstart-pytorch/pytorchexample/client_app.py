@@ -21,6 +21,7 @@ def train(msg: Message, context: Context):
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    global_params = [param.detach().clone() for param in model.parameters()]
 
     # Load the data
     partition_id = context.node_config["partition-id"]
@@ -38,6 +39,8 @@ def train(msg: Message, context: Context):
         context.run_config["local-epochs"],
         msg.content["config"]["lr"],
         device,
+        proximal_mu=float(msg.content["config"].get("proximal-mu", 0.0)),
+        global_params=global_params,
     )
 
     # Construct and return reply Message

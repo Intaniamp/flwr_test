@@ -22,6 +22,7 @@ class Net(nn.Module):
         depth = 6
         mlp_dim = 384
         num_classes = 10
+        epochs = 20
 
         num_patches = (image_size // patch_size) ** 2
         self.patch_embed = nn.Conv2d(
@@ -135,7 +136,15 @@ def _unpack_batch(batch):
     return images, labels
 
 
-def train(net, trainloader, epochs, lr, device):
+def train(
+    net,
+    trainloader,
+    epochs,
+    lr,
+    device,
+    proximal_mu: float = 0.0,
+    global_params: list[torch.Tensor] | None = None,
+):
     """Train the model on the training set."""
     net.to(device)  # move model to GPU if available
     criterion = torch.nn.CrossEntropyLoss().to(device)
@@ -149,6 +158,11 @@ def train(net, trainloader, epochs, lr, device):
             labels = labels.to(device)
             optimizer.zero_grad()
             loss = criterion(net(images), labels)
+            if proximal_mu > 0.0 and global_params is not None:
+                proximal_term = torch.tensor(0.0, device=device)
+                for local_weights, global_weights in zip(net.parameters(), global_params):
+                    proximal_term += torch.sum((local_weights - global_weights) ** 2)
+                loss = loss + (proximal_mu / 2.0) * proximal_term
             loss.backward()
             optimizer.step()
             running_loss += loss.item()

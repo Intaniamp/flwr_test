@@ -3,7 +3,7 @@
 import torch
 from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
-from flwr.serverapp.strategy import FedAvg
+from flwr.serverapp.strategy import FedProx
 
 from pytorchexample.task import Net, global_evaluate
 
@@ -21,21 +21,23 @@ def main(grid: Grid, context: Context) -> None:
     lr: float = context.run_config["learning-rate"]
     fraction_train: float = context.run_config["franction-train"]
     dataset_path: str = context.run_config["dataset-path"]
+    proximal_mu: float = context.run_config["proximal-mu"]
 
     # Load global model
     global_model = Net()
     arrays = ArrayRecord(global_model.state_dict())
 
-    # Initialize FedAvg strategy
-    strategy = FedAvg(
+    # Initialize FedProx strategy
+    strategy = FedProx(
         fraction_train=fraction_train,
         fraction_evaluate=fraction_evaluate,
         min_train_nodes=2,
         min_evaluate_nodes=2,
-        min_available_nodes=10,
+        min_available_nodes=2,
+        proximal_mu=proximal_mu,
     )
 
-    # Start strategy, run FedAvg for `num_rounds`
+    # Start strategy, run FedProx for `num_rounds`
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
