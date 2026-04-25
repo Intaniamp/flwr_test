@@ -21,12 +21,16 @@ def train(msg: Message, context: Context):
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    global_params = [param.detach().clone() for param in model.parameters()]
 
     # Load the data
     partition_id = context.node_config["partition-id"]
     num_partitions = context.node_config["num-partitions"]
     batch_size = context.run_config["batch-size"]
-    trainloader, _ = load_data(partition_id, num_partitions, batch_size)
+    dataset_path = context.run_config["dataset-path"]
+    trainloader, _ = load_data(
+        partition_id, num_partitions, batch_size, dataset_path=dataset_path
+    )
 
     # Call the training function
     train_loss = train_fn(
@@ -35,6 +39,8 @@ def train(msg: Message, context: Context):
         context.run_config["local-epochs"],
         msg.content["config"]["lr"],
         device,
+        proximal_mu=float(msg.content["config"].get("proximal-mu", 0.0)),
+        global_params=global_params,
     )
 
     # Construct and return reply Message
@@ -62,7 +68,10 @@ def evaluate(msg: Message, context: Context):
     partition_id = context.node_config["partition-id"]
     num_partitions = context.node_config["num-partitions"]
     batch_size = context.run_config["batch-size"]
-    _, valloader = load_data(partition_id, num_partitions, batch_size)
+    dataset_path = context.run_config["dataset-path"]
+    _, valloader = load_data(
+        partition_id, num_partitions, batch_size, dataset_path=dataset_path
+    )
 
     # Call the evaluation function
     eval_loss, eval_acc = test_fn(
