@@ -12,6 +12,22 @@ from pytorchexample.task import train as train_fn
 app = ClientApp()
 
 
+def _get_partition_config(context: Context) -> tuple[int, int]:
+    """Resolve partition id/count, allowing optional custom partition count."""
+    runtime_partition_id = int(context.node_config["partition-id"])
+    runtime_num_partitions = int(context.node_config["num-partitions"])
+    custom_num_partitions = int(
+        context.run_config.get("data-num-partitions", runtime_num_partitions)
+    )
+
+    if custom_num_partitions <= 0:
+        raise ValueError("'data-num-partitions' must be > 0")
+
+    # Keep partition id in range when custom count differs from runtime node count.
+    partition_id = runtime_partition_id % custom_num_partitions
+    return partition_id, custom_num_partitions
+
+
 @app.train()
 def train(msg: Message, context: Context):
     """Train the model on local data."""
@@ -22,10 +38,10 @@ def train(msg: Message, context: Context):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
     global_params = [param.detach().clone() for param in model.parameters()]
+    
 
     # Load the data
-    partition_id = context.node_config["partition-id"]
-    num_partitions = context.node_config["num-partitions"]
+    partition_id, num_partitions = _get_partition_config(context)
     batch_size = context.run_config["batch-size"]
     dataset_path = context.run_config["dataset-path"]
     trainloader, _ = load_data(
@@ -36,10 +52,13 @@ def train(msg: Message, context: Context):
     train_loss = train_fn(
         model,
         trainloader,
-        context.run_config["local-epochs"],
-        msg.content["config"]["lr"],
+        # Ubah baris ini: Ambil local_epochs dari config server
+        int(msg.content["config"].get("local_epochs", 1)), 
+        # Ambil learning rate dari config server
+        float(msg.content["config"]["lr"]),
         device,
-        proximal_mu=float(msg.content["config"].get("proximal-mu", 0.0)),
+        # Ubah baris ini: Pastikan key-nya sama persis dengan yang dikirim server
+        proximal_mu=float(msg.content["config"].get("proximal_mu", 0.0)),
         global_params=global_params,
     )
 
@@ -65,8 +84,7 @@ def evaluate(msg: Message, context: Context):
     model.to(device)
 
     # Load the data
-    partition_id = context.node_config["partition-id"]
-    num_partitions = context.node_config["num-partitions"]
+    partition_id, num_partitions = _get_partition_config(context)
     batch_size = context.run_config["batch-size"]
     dataset_path = context.run_config["dataset-path"]
     _, valloader = load_data(

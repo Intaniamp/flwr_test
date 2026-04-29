@@ -15,13 +15,16 @@ app = ServerApp()
 def main(grid: Grid, context: Context) -> None:
     """Main entry point for the ServerApp."""
 
-    # Read run config
+    # Read run config (pastikan typo fraction-train sudah diperbaiki)
     fraction_evaluate: float = context.run_config["fraction-evaluate"]
     num_rounds: int = context.run_config["num-server-rounds"]
     lr: float = context.run_config["learning-rate"]
-    fraction_train: float = context.run_config["franction-train"]
+    fraction_train: float = context.run_config["fraction-train"]
     dataset_path: str = context.run_config["dataset-path"]
     proximal_mu: float = context.run_config["proximal-mu"]
+    
+    # Tambahkan variabel untuk membaca local epochs dari config (default ke 3 jika tidak ada)
+    local_epochs: int = context.run_config.get("local-epochs", 1)
 
     # Load global model
     global_model = Net()
@@ -41,7 +44,12 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr}),
+        # MASUKKAN 3 VARIABEL INI KE DALAM TRAIN CONFIG
+        train_config=ConfigRecord({
+            "lr": lr,
+            "local_epochs": local_epochs,
+            "proximal_mu": proximal_mu  
+        }),
         num_rounds=num_rounds,
         evaluate_fn=lambda server_round, arrays: global_evaluate(
             server_round, arrays, dataset_path=dataset_path
