@@ -25,13 +25,13 @@ serverapp = "pytorchexample.server_app:app"
 clientapp = "pytorchexample.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 5
+num-server-rounds = 7
 fraction-train = 1.0
 fraction-evaluate = 1.0
-local-epochs = 3
+local-epochs = 5
 learning-rate = 0.001
 batch-size = 32
-dataset-path = "../dataset"
+dataset-path = "C:/coolyeah/flwr-test/dataset_split"
 data-num-partitions = 2
 proximal-mu = 0.1
 

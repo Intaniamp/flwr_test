@@ -16,83 +16,71 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("DataTracker")
 
 class Net(nn.Module):
-    """Lightweight Vision Transformer for CIFAR-10 (32x32)."""
-
+    """Vision Transformer 100% disamakan dengan kode temen (model.py)"""
     def __init__(self):
         super().__init__()
-        image_size = 32
-        patch_size = 4
-        embed_dim = 192
-        num_heads = 4
-        depth = 6
-        mlp_dim = 384
-        num_classes = 10
-        epochs = 20
+        
+        config = {
+            "img_size": 224,
+            "patch_size": 16,
+            "embed_dim": 128,
+            "attention_heads": 4,
+            "mlp_nodes": 128,
+            "transformer_blocks": 4,
+            "num_channels": 3,
+            "num_classes": 4,
+        }
 
-        num_patches = (image_size // patch_size) ** 2
+        self.img_size = config["img_size"]
+        self.patch_size = config["patch_size"]
+        self.embed_dim = config["embed_dim"]
+
+        patch_num = (self.img_size // self.patch_size) ** 2
+
         self.patch_embed = nn.Conv2d(
-            in_channels=3,
-            out_channels=embed_dim,
-            kernel_size=patch_size,
-            stride=patch_size,
+            in_channels=config["num_channels"],
+            out_channels=self.embed_dim,
+            kernel_size=self.patch_size,
+            stride=self.patch_size
         )
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+
+        self.cls_token = nn.Parameter(torch.randn(1, 1, self.embed_dim) * 0.02)
+        self.position_embedding = nn.Parameter(torch.randn(1, patch_num + 1, self.embed_dim) * 0.02)
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim,
-            nhead=num_heads,
-            dim_feedforward=mlp_dim,
-            dropout=0.1,
-            activation="gelu",
-            batch_first=True,
+            d_model=self.embed_dim,
+            nhead=config["attention_heads"],
+            dim_feedforward=config["mlp_nodes"],
+            batch_first=True
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=depth)
-        self.norm = nn.LayerNorm(embed_dim)
-        self.head = nn.Linear(embed_dim, num_classes)
+
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config["transformer_blocks"])
+        self.mlp_head = nn.Linear(self.embed_dim, config["num_classes"])
 
     def forward(self, x):
-        x = self.patch_embed(x)
-        x = x.flatten(2).transpose(1, 2)
+        B = x.shape[0]
 
-        cls_token = self.cls_token.expand(x.size(0), -1, -1)
+        x = self.patch_embed(x)  
+        x = x.flatten(2).transpose(1, 2)  
+
+        cls_token = self.cls_token.expand(B, -1, -1)
         x = torch.cat((cls_token, x), dim=1)
-        x = x + self.pos_embed
 
-        x = self.encoder(x)
-        x = self.norm(x[:, 0])
-        return self.head(x)
+        x = x + self.position_embedding
+        x = self.transformer(x)
 
-LOCAL_DATASET_DIR = Path(__file__).resolve().parents[2] / "dataset"
+        x = x[:, 0]  
+        x = self.mlp_head(x)
+
+        return x
+
 IMAGE_TRANSFORMS = Compose(
-    [Resize((32, 32)), ToTensor(), Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
+    [Resize((224, 224)), ToTensor(), Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
 )
 
-NUM_PARTITIONS = 2
-IMAGES_PER_CLASS_PER_CLIENT = 10
-
-
-def _resolve_dataset_dir(dataset_path: str | None) -> Path:
-    if dataset_path:
-        return Path(dataset_path).expanduser().resolve()
-    return LOCAL_DATASET_DIR
-
-
-def _build_local_dataset(dataset_path: str | None) -> ImageFolder:
-    dataset_dir = _resolve_dataset_dir(dataset_path)
-    if not dataset_dir.exists():
-        raise FileNotFoundError(
-            f"Dataset folder not found: {dataset_dir}. "
-            "Set 'dataset-path' in run-config or place data in ../dataset."
-        )
-    return ImageFolder(root=str(dataset_dir), transform=IMAGE_TRANSFORMS)
-
-
+# pembagi ke klien, tiap client dapat gambar dari semua kelas (stratified)
 def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partitions: int):
-    """
-    Bagi rata SELURUH isi dataset ke tiap client secara stratified.
-    """
-    from collections import defaultdict
+    """Bagi rata isi folder TRAIN ke tiap client."""
     label_to_indices = defaultdict(list)
     for idx, (_, label) in enumerate(dataset.samples):
         label_to_indices[label].append(idx)
@@ -100,21 +88,19 @@ def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partiti
     client_indices = []
     class_names = dataset.classes
 
-    # --- TRACKING UI ---
-    print(f"\n{'='*65}")
-    print(f"🔍 TRACKING LOAD DATA - CLIENT {partition_id}")
-    print(f"{'='*65}")
+    print(f"\n{'='*70}")
+    print(f"🔍 TRACKING LOAD DATA - CLIENT {partition_id} (DARI FOLDER TRAIN)")
+    print(f"{'='*70}")
 
     for label in sorted(label_to_indices.keys()):
         indices = label_to_indices[label]
         total_class_images = len(indices)
 
-        # Hitung jatah gambar per client untuk kelas ini
         images_per_client = total_class_images // num_partitions
-
+        
+        # Titik awal (start) dan titik akhir (end) pengambilan gambar
         start = partition_id * images_per_client
         
-        # Client terakhir ngambil semua sisa data biar gak ada image yang mubazir
         if partition_id == num_partitions - 1:
             end = total_class_images
         else:
@@ -122,28 +108,30 @@ def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partiti
 
         slice_indices = indices[start:end]
         client_indices.extend(slice_indices)
-        class_name = class_names[label]
+        
+        print(f"📁 Kelas {class_names[label]:<25} : dapet {len(slice_indices):>4} gambar (Index: {start:>4} s/d {end-1:>4})")
 
-        # Print tracking per folder
-        print(f"📁 Kelas {class_name:<25} : dapet {len(slice_indices)} gambar (Index: {start} s/d {end-1})")
-
-    print(f"{'-'*65}")
-    print(f"✅ TOTAL GAMBAR CLIENT {partition_id} : {len(client_indices)} gambar")
-    print(f"{'='*65}\n")
+    print(f"{'-'*70}")
+    print(f"✅ TOTAL GAMBAR BELAJAR CLIENT {partition_id} : {len(client_indices)} gambar")
+    print(f"{'='*70}\n")
 
     return client_indices
 
 
-def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_path: str | None = None):
-    """Load client partition dengan data yang sudah terbagi rata."""
-    dataset = _build_local_dataset(dataset_path)
-
-    # Panggil fungsi yang baru tanpa hardcode IMAGES_PER_CLASS
+def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_path: str):
+    """Load data Client (HANYA DARI FOLDER TRAIN)"""
+    
+    # Bikin path dinamis berdasarkan config pyproject.toml
+    train_dir = Path(dataset_path) / "train"
+    
+    if not train_dir.exists():
+        raise FileNotFoundError(f"Folder TRAIN tidak ditemukan di: {train_dir}! Tolong jalankan split_dataset.py dulu.")
+        
+    dataset = ImageFolder(root=str(train_dir), transform=IMAGE_TRANSFORMS)
+    
     indices = _get_stratified_indices(dataset, partition_id, num_partitions)
-
     client_subset = Subset(dataset, indices)
-
-    # 80% train, 20% val per client
+    
     train_size = int(0.8 * len(client_subset))
     val_size = len(client_subset) - train_size
     generator = torch.Generator().manual_seed(42 + partition_id)
@@ -151,47 +139,33 @@ def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_p
 
     trainloader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
     testloader = DataLoader(val_subset, batch_size=batch_size)
-    
     return trainloader, testloader
 
 
-def load_centralized_dataset(dataset_path: str | None = None):
-    dataset = _build_local_dataset(dataset_path)
-    from collections import defaultdict
-
-    label_to_indices = defaultdict(list)
-    for idx, (_, label) in enumerate(dataset.samples):
-        label_to_indices[label].append(idx)
-
-    test_indices = []
-    for label in sorted(label_to_indices.keys()):
-        indices = label_to_indices[label]
-        start = NUM_PARTITIONS * IMAGES_PER_CLASS_PER_CLIENT
-        test_indices.extend(indices[start:])
-
-    print(f"[Centralized] Total test samples: {len(test_indices)}")
-    test_subset = Subset(dataset, test_indices)
-    return DataLoader(test_subset, batch_size=128, shuffle=False)
+def load_centralized_dataset(dataset_path: str):
+    """Load data Ujian Server (HANYA DARI FOLDER VAL)"""
+    
+    # Bikin path dinamis berdasarkan config pyproject.toml
+    val_dir = Path(dataset_path) / "val"
+    
+    if not val_dir.exists():
+        raise FileNotFoundError(f"Folder VAL tidak ditemukan di: {val_dir}! Tolong jalankan split_dataset.py dulu.")
+        
+    dataset = ImageFolder(root=str(val_dir), transform=IMAGE_TRANSFORMS)
+    
+    print(f"\n[Centralized] 🎯 Total soal ujian murni untuk Server: {len(dataset)} gambar\n")
+    return DataLoader(dataset, batch_size=128, shuffle=False)
 
 
+# traing dan testing tetap di task.py biar bisa dipanggil dari server_app.py
 def _unpack_batch(batch):
-    """Support dict batches (HF-style) and tuple batches (ImageFolder)."""
     if isinstance(batch, dict):
         return batch["img"], batch["label"]
     images, labels = batch
     return images, labels
 
 
-def train(
-    net,
-    trainloader,
-    epochs,
-    lr,
-    device,
-    proximal_mu: float = 0.0,
-    global_params: list[torch.Tensor] | None = None,
-):
-    """Train the model on the training set."""
+def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global_params: list[torch.Tensor] | None = None):
     net.to(device)
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
@@ -199,9 +173,7 @@ def train(
     running_loss = 0.0
     
     for epoch in range(epochs):
-        # Bungkus trainloader pakai tqdm biar jadi loading bar
         progress_bar = tqdm(trainloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
-        
         for batch in progress_bar:
             images, labels = _unpack_batch(batch)
             images = images.to(device)
@@ -219,8 +191,6 @@ def train(
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            
-            # Update teks di samping loading bar biar kelihatan nilai loss-nya turun/nggak
             progress_bar.set_postfix({'loss': loss.item()})
             
     avg_trainloss = running_loss / (epochs * len(trainloader))
@@ -228,7 +198,6 @@ def train(
 
 
 def test(net, testloader, device):
-    """Validate the model on the test set."""
     net.to(device)
     criterion = torch.nn.CrossEntropyLoss()
     correct, loss = 0, 0.0
@@ -244,22 +213,14 @@ def test(net, testloader, device):
     loss = loss / len(testloader)
     return loss, accuracy
 
-def global_evaluate(
-    server_round: int, arrays: ArrayRecord, dataset_path: str | None = None
-) -> MetricRecord:
-    """Evaluate model on central data."""
 
-    # Load the model and initialize it with the received weights
+def global_evaluate(server_round: int, arrays: ArrayRecord, dataset_path: str | None = None) -> MetricRecord:
     model = Net()
     model.load_state_dict(arrays.to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    # Load entire test set
     test_dataloader = load_centralized_dataset(dataset_path)
-
-    # Evaluate the global model on the test set
     test_loss, test_acc = test(model, test_dataloader, device)
 
-    # Return the evaluation metrics
     return MetricRecord({"accuracy": test_acc, "loss": test_loss})

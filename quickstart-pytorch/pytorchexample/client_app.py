@@ -52,12 +52,9 @@ def train(msg: Message, context: Context):
     train_loss = train_fn(
         model,
         trainloader,
-        # Ubah baris ini: Ambil local_epochs dari config server
         int(msg.content["config"].get("local_epochs", 1)), 
-        # Ambil learning rate dari config server
         float(msg.content["config"]["lr"]),
         device,
-        # Ubah baris ini: Pastikan key-nya sama persis dengan yang dikirim server
         proximal_mu=float(msg.content["config"].get("proximal_mu", 0.0)),
         global_params=global_params,
     )

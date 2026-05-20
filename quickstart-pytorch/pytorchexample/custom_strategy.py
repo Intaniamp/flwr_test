@@ -1,10 +1,10 @@
 from typing import Iterable
 from flwr.serverapp import Grid
-from flwr.serverapp.strategy import FedAdagrad
+from flwr.serverapp.strategy import FedProx
 from flwr.app import ArrayRecord, ConfigRecord, Message
 
 
-class CustomFedAdagrad(FedAdagrad):
+class CustomFedProx(FedProx):
     def configure_train(
         self, server_round: int, arrays: ArrayRecord, config: ConfigRecord, grid: Grid
     ) -> Iterable[Message]:

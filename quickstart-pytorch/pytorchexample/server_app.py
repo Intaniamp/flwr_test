@@ -4,7 +4,7 @@ import torch
 from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
 from flwr.serverapp.strategy import FedProx
-
+from pytorchexample.custom_strategy import CustomFedProx
 from pytorchexample.task import Net, global_evaluate
 
 # Create ServerApp
@@ -30,8 +30,27 @@ def main(grid: Grid, context: Context) -> None:
     global_model = Net()
     arrays = ArrayRecord(global_model.state_dict())
 
+    best_accuracy = 0.0
+
+    def evaluate_and_save(server_round, current_arrays):
+        nonlocal best_accuracy
+        
+        metrics_record = global_evaluate(server_round, current_arrays, dataset_path=dataset_path)
+        
+        loss = float(metrics_record["loss"])
+        accuracy = float(metrics_record["accuracy"])
+        
+        if accuracy > best_accuracy:
+            print(f"\n🌟 REKOR BARU! Round {server_round}: {accuracy:.4f} (Melampaui {best_accuracy:.4f})")
+            best_accuracy = accuracy
+            state_dict = current_arrays.to_torch_state_dict()
+            torch.save(state_dict, "best_model_padi.pt")
+            print("💾 Model paling jenius berhasil diamankan ke 'best_model_padi.pt'!\n")
+            
+        return metrics_record
+
     # Initialize FedProx strategy
-    strategy = FedProx(
+    strategy = CustomFedProx(
         fraction_train=fraction_train,
         fraction_evaluate=fraction_evaluate,
         min_train_nodes=2,
@@ -44,16 +63,13 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        # MASUKKAN 3 VARIABEL INI KE DALAM TRAIN CONFIG
         train_config=ConfigRecord({
             "lr": lr,
             "local_epochs": local_epochs,
             "proximal_mu": proximal_mu  
         }),
         num_rounds=num_rounds,
-        evaluate_fn=lambda server_round, arrays: global_evaluate(
-            server_round, arrays, dataset_path=dataset_path
-        ),
+        evaluate_fn=evaluate_and_save
     )
 
     # Save final model to disk
