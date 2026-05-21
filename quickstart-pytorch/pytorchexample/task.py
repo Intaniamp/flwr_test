@@ -170,8 +170,11 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
     criterion = torch.nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
     net.train()
-    running_loss = 0.0
     
+    running_loss = 0.0
+    correct = 0
+    total = 0 
+
     for epoch in range(epochs):
         progress_bar = tqdm(trainloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
         for batch in progress_bar:
@@ -180,7 +183,8 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
             labels = labels.to(device)
             optimizer.zero_grad()
             
-            loss = criterion(net(images), labels)
+            outputs = net(images)
+            loss = criterion(outputs, labels)
             
             if proximal_mu > 0.0 and global_params is not None:
                 proximal_term = torch.tensor(0.0, device=device)
@@ -191,10 +195,18 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
+            
+            # Hitung Akurasi Train
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
             progress_bar.set_postfix({'loss': loss.item()})
             
     avg_trainloss = running_loss / (epochs * len(trainloader))
-    return avg_trainloss
+    train_accuracy = correct / total
+    
+    return avg_trainloss, train_accuracy
 
 
 def test(net, testloader, device):

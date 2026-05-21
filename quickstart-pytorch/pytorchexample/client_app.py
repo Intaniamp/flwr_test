@@ -49,7 +49,7 @@ def train(msg: Message, context: Context):
     )
 
     # Call the training function
-    train_loss = train_fn(
+    train_loss, train_acc = train_fn(
         model,
         trainloader,
         int(msg.content["config"].get("local_epochs", 1)), 
@@ -59,10 +59,10 @@ def train(msg: Message, context: Context):
         global_params=global_params,
     )
 
-    # Construct and return reply Message
     model_record = ArrayRecord(model.state_dict())
     metrics = {
         "train_loss": train_loss,
+        "train_acc": train_acc,  # <--- Metrik akurasi train dikirim ke server!
         "num-examples": len(trainloader.dataset),
     }
     metric_record = MetricRecord(metrics)
