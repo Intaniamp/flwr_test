@@ -10,13 +10,14 @@ from collections import defaultdict
 from flwr.app import ArrayRecord, MetricRecord
 from torch.utils.data import DataLoader, Subset, random_split
 from torchvision.datasets import ImageFolder
-from torchvision.transforms import Compose, Normalize, Resize, ToTensor
+from collections import Counter
+from torchvision.transforms import Compose, Normalize, Resize, ToTensor, RandomHorizontalFlip, RandomRotation
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("DataTracker")
 
 class Net(nn.Module):
-    """Vision Transformer 100% disamakan dengan kode temen (model.py)"""
+    """Vision Transformer (model.py)"""
     def __init__(self):
         super().__init__()
         
@@ -74,9 +75,19 @@ class Net(nn.Module):
 
         return x
 
-IMAGE_TRANSFORMS = Compose(
-    [Resize((224, 224)), ToTensor(), Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
-)
+TRAIN_TRANSFORMS = Compose([
+    Resize((224, 224)),
+    RandomHorizontalFlip(p=0.5),
+    RandomRotation(15),          
+    ToTensor(),
+    Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
+
+VAL_TRANSFORMS = Compose([
+    Resize((224, 224)),
+    ToTensor(),
+    Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
 
 # pembagi ke klien, tiap client dapat gambar dari semua kelas (stratified)
 def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partitions: int):
@@ -127,7 +138,7 @@ def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_p
     if not train_dir.exists():
         raise FileNotFoundError(f"Folder TRAIN tidak ditemukan di: {train_dir}! Tolong jalankan split_dataset.py dulu.")
         
-    dataset = ImageFolder(root=str(train_dir), transform=IMAGE_TRANSFORMS)
+    dataset = ImageFolder(root=str(train_dir), transform=TRAIN_TRANSFORMS)
     
     indices = _get_stratified_indices(dataset, partition_id, num_partitions)
     client_subset = Subset(dataset, indices)
@@ -151,7 +162,7 @@ def load_centralized_dataset(dataset_path: str):
     if not val_dir.exists():
         raise FileNotFoundError(f"Folder VAL tidak ditemukan di: {val_dir}! Tolong jalankan split_dataset.py dulu.")
         
-    dataset = ImageFolder(root=str(val_dir), transform=IMAGE_TRANSFORMS)
+    dataset = ImageFolder(root=str(val_dir), transform=VAL_TRANSFORMS)
     
     print(f"\n[Centralized] 🎯 Total soal ujian murni untuk Server: {len(dataset)} gambar\n")
     return DataLoader(dataset, batch_size=128, shuffle=False)
@@ -167,13 +178,29 @@ def _unpack_batch(batch):
 
 def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global_params: list[torch.Tensor] | None = None):
     net.to(device)
-    criterion = torch.nn.CrossEntropyLoss().to(device)
-    optimizer = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1e-4)
-    net.train()
     
+    base_dataset = trainloader.dataset.dataset.dataset
+    client_indices = trainloader.dataset.dataset.indices
+    train_indices = trainloader.dataset.indices
+    
+    # Ambil label target yang sesuai dengan urutan index aslinya
+    subset_targets = [base_dataset.targets[client_indices[i]] for i in train_indices]
+    
+    class_counts = Counter(subset_targets)
+    # Ambil count untuk 4 kelas (pakai .get(i, 1) buat jaga-jaga kalau ada kelas yg kebetulan kosong di klien)
+    counts = [class_counts.get(i, 1) for i in range(4)] 
+    
+    weights = 1.0 / torch.tensor(counts, dtype=torch.float)
+    weights = weights / weights.sum()
+    
+    criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
+    
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=1e-4)
+    
+    net.train()
     running_loss = 0.0
-    correct = 0
-    total = 0 
+    correct = 0  
+    total = 0    
 
     for epoch in range(epochs):
         progress_bar = tqdm(trainloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
@@ -204,7 +231,7 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
             progress_bar.set_postfix({'loss': loss.item()})
             
     avg_trainloss = running_loss / (epochs * len(trainloader))
-    train_accuracy = correct / total
+    train_accuracy = correct / total  
     
     return avg_trainloss, train_accuracy
 
