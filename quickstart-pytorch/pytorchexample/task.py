@@ -130,26 +130,41 @@ def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partiti
 
 
 def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_path: str):
-    """Load data Client (HANYA DARI FOLDER TRAIN)"""
+    """Load data Client (Bisa Kaggle atau Real Data)"""
     
-    # Bikin path dinamis berdasarkan config pyproject.toml
-    train_dir = Path(dataset_path) / "train"
-    
-    if not train_dir.exists():
-        raise FileNotFoundError(f"Folder TRAIN tidak ditemukan di: {train_dir}! Tolong jalankan split_dataset.py dulu.")
+    if partition_id == 2:
+        real_train_dir = Path("C:/coolyeah/flwr-test/real_dataset_split/train")
+        real_val_dir = Path("C:/coolyeah/flwr-test/real_dataset_split/val")
         
-    dataset = ImageFolder(root=str(train_dir), transform=TRAIN_TRANSFORMS)
-    
-    indices = _get_stratified_indices(dataset, partition_id, num_partitions)
-    client_subset = Subset(dataset, indices)
-    
-    train_size = int(0.8 * len(client_subset))
-    val_size = len(client_subset) - train_size
-    generator = torch.Generator().manual_seed(42 + partition_id)
-    train_subset, val_subset = random_split(client_subset, [train_size, val_size], generator=generator)
+        if not real_train_dir.exists():
+            raise FileNotFoundError(f"Folder real data tidak ditemukan: {real_train_dir}")
+            
+        train_subset = ImageFolder(root=str(real_train_dir), transform=TRAIN_TRANSFORMS)
+        val_subset = ImageFolder(root=str(real_val_dir), transform=VAL_TRANSFORMS)
+        
+        print(f"\n[Client {partition_id}] 🌾 Menggunakan REAL DATA: Train={len(train_subset)}, Val={len(val_subset)}\n")
+        
+    else:
+        kaggle_train_dir = Path("C:/coolyeah/flwr-test/dataset_split/train")
+        
+        if not kaggle_train_dir.exists():
+            raise FileNotFoundError(f"Folder TRAIN tidak ditemukan di: {kaggle_train_dir}! Tolong jalankan split_dataset.py dulu.")
+            
+        dataset = ImageFolder(root=str(kaggle_train_dir), transform=TRAIN_TRANSFORMS)
+        
+        kaggle_partitions = num_partitions - 1
+        indices = _get_stratified_indices(dataset, partition_id, kaggle_partitions)
+        client_subset = Subset(dataset, indices)
+        
+        train_size = int(0.8 * len(client_subset))
+        val_size = len(client_subset) - train_size
+        generator = torch.Generator().manual_seed(42 + partition_id)
+        
+        train_subset, val_subset = random_split(client_subset, [train_size, val_size], generator=generator)
 
     trainloader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
     testloader = DataLoader(val_subset, batch_size=batch_size)
+    
     return trainloader, testloader
 
 
@@ -179,15 +194,17 @@ def _unpack_batch(batch):
 def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global_params: list[torch.Tensor] | None = None):
     net.to(device)
     
-    base_dataset = trainloader.dataset.dataset.dataset
-    client_indices = trainloader.dataset.dataset.indices
-    train_indices = trainloader.dataset.indices
-    
-    # Ambil label target yang sesuai dengan urutan index aslinya
-    subset_targets = [base_dataset.targets[client_indices[i]] for i in train_indices]
+    if isinstance(trainloader.dataset, Subset):
+        # Logika untuk Data Kaggle (Nested Subsets)
+        base_dataset = trainloader.dataset.dataset.dataset
+        client_indices = trainloader.dataset.dataset.indices
+        train_indices = trainloader.dataset.indices
+        subset_targets = [base_dataset.targets[client_indices[i]] for i in train_indices]
+    else:
+        # Logika untuk Real Data (ImageFolder langsung)
+        subset_targets = trainloader.dataset.targets
     
     class_counts = Counter(subset_targets)
-    # Ambil count untuk 4 kelas (pakai .get(i, 1) buat jaga-jaga kalau ada kelas yg kebetulan kosong di klien)
     counts = [class_counts.get(i, 1) for i in range(4)] 
     
     weights = 1.0 / torch.tensor(counts, dtype=torch.float)

@@ -84,13 +84,16 @@ def main(grid: Grid, context: Context) -> None:
             
         return metrics_record
 
+    # Ambil jumlah partisi dari pyproject.toml
+    num_clients: int = context.run_config["data-num-partitions"]
+
     # Initialize FedProx strategy
     strategy = CustomFedProx(
         fraction_train=fraction_train,
         fraction_evaluate=fraction_evaluate,
-        min_train_nodes=2,
-        min_evaluate_nodes=2,
-        min_available_nodes=2,
+        min_train_nodes=num_clients,      
+        min_evaluate_nodes=num_clients,   
+        min_available_nodes=num_clients,  
         proximal_mu=proximal_mu,
     )
 
