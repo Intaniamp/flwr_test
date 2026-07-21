@@ -10,7 +10,6 @@ from pytorchexample.task import Net, global_evaluate
 
 app = ServerApp()
 
-
 @app.main()
 def main(grid: Grid, context: Context) -> None:
     """Main entry point for the ServerApp."""
@@ -19,10 +18,11 @@ def main(grid: Grid, context: Context) -> None:
     num_rounds: int = context.run_config["num-server-rounds"]
     lr: float = context.run_config["learning-rate"]
     fraction_train: float = context.run_config["fraction-train"]
-    dataset_path: str = context.run_config["dataset-path"]
     proximal_mu: float = context.run_config["proximal-mu"]
-    
     local_epochs: int = context.run_config.get("local-epochs", 1)
+    
+    kaggle_path: str = context.run_config["kaggle-dataset-path"]
+    real_path: str = context.run_config["real-dataset-path"]
 
     # Load global model dasar
     global_model = Net()
@@ -44,7 +44,7 @@ def main(grid: Grid, context: Context) -> None:
             global_model.to(device)
             
             from pytorchexample.task import load_centralized_dataset, test
-            test_dataloader = load_centralized_dataset(dataset_path)
+            test_dataloader = load_centralized_dataset(kaggle_path, real_path)
             _, initial_acc = test(global_model, test_dataloader, device)
             
             best_accuracy = initial_acc # Kunci rekor awal
@@ -70,7 +70,12 @@ def main(grid: Grid, context: Context) -> None:
     def evaluate_and_save(server_round, current_arrays):
         nonlocal best_accuracy
         
-        metrics_record = global_evaluate(server_round, current_arrays, dataset_path=dataset_path)
+        metrics_record = global_evaluate(
+            server_round, 
+            current_arrays, 
+            kaggle_path=kaggle_path, 
+            real_path=real_path
+        )
         
         loss = float(metrics_record["loss"])
         accuracy = float(metrics_record["accuracy"])
@@ -87,6 +92,38 @@ def main(grid: Grid, context: Context) -> None:
     # Ambil jumlah partisi dari pyproject.toml
     num_clients: int = context.run_config["data-num-partitions"]
 
+    # FUNGSI PENCEGAT METRIK INDIVIDU
+    def weighted_average_train(metrics):
+        """Fungsi untuk agregasi metrik Train sekaligus melacak Klien individu"""
+        aggregated = {}
+        total_examples = sum([num_examples for num_examples, _ in metrics])
+        
+        # 1. Hitung rata-rata gabungan (standar Flower)
+        weighted_acc = sum([num_examples * m["train_acc"] for num_examples, m in metrics]) / total_examples
+        aggregated["train_acc"] = weighted_acc
+        
+        # 2. Catat nilai masing-masing klien untuk ditampilkan di Final Result
+        for num_examples, m in metrics:
+            cid = m.get("client_id", "unknown")
+            aggregated[f"client_{cid}_acc"] = m["train_acc"]
+            
+        return aggregated
+
+    def weighted_average_evaluate(metrics):
+        """Fungsi untuk agregasi metrik Evaluate sekaligus melacak Klien individu"""
+        aggregated = {}
+        total_examples = sum([num_examples for num_examples, _ in metrics])
+        
+        # 1. Hitung rata-rata gabungan (standar Flower)
+        weighted_acc = sum([num_examples * m["eval_acc"] for num_examples, m in metrics]) / total_examples
+        aggregated["eval_acc"] = weighted_acc
+        
+        # 2. Catat nilai masing-masing klien untuk ditampilkan di Final Result
+        for num_examples, m in metrics:
+            cid = m.get("client_id", "unknown")
+            aggregated[f"client_{cid}_acc"] = m["eval_acc"]
+            
+        return aggregated
     # Initialize FedProx strategy
     strategy = CustomFedProx(
         fraction_train=fraction_train,
@@ -96,6 +133,9 @@ def main(grid: Grid, context: Context) -> None:
         min_available_nodes=num_clients,  
         proximal_mu=proximal_mu,
     )
+
+    strategy.fit_metrics_aggregation_fn = weighted_average_train
+    strategy.evaluate_metrics_aggregation_fn = weighted_average_evaluate
 
     # Start strategy, run FedProx for `num_rounds`
     result = strategy.start(

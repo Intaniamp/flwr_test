@@ -43,9 +43,14 @@ def train(msg: Message, context: Context):
     # Load the data
     partition_id, num_partitions = _get_partition_config(context)
     batch_size = context.run_config["batch-size"]
-    dataset_path = context.run_config["dataset-path"]
+    
+    # Menangkap 2 path config baru
+    kaggle_path = context.run_config["kaggle-dataset-path"]
+    real_path = context.run_config["real-dataset-path"]
+    
+    # Melempar 2 path ke fungsi load_data
     trainloader, _ = load_data(
-        partition_id, num_partitions, batch_size, dataset_path=dataset_path
+        partition_id, num_partitions, batch_size, kaggle_path=kaggle_path, real_path=real_path
     )
 
     # Call the training function
@@ -83,9 +88,12 @@ def evaluate(msg: Message, context: Context):
     # Load the data
     partition_id, num_partitions = _get_partition_config(context)
     batch_size = context.run_config["batch-size"]
-    dataset_path = context.run_config["dataset-path"]
+    
+    kaggle_path = context.run_config["kaggle-dataset-path"]
+    real_path = context.run_config["real-dataset-path"]
+    
     _, valloader = load_data(
-        partition_id, num_partitions, batch_size, dataset_path=dataset_path
+        partition_id, num_partitions, batch_size, kaggle_path=kaggle_path, real_path=real_path
     )
 
     # Call the evaluation function
@@ -94,8 +102,11 @@ def evaluate(msg: Message, context: Context):
         valloader,
         device,
     )
+    
+    # 👉 TAMBAHKAN BARIS INI UNTUK LANGSUNG CETAK HASIL KE TERMINAL
+    print(f"\n🎯 [HASIL UJIAN LOKAL] Client {partition_id} | Akurasi: {eval_acc*100:.2f}% | Loss: {eval_loss:.4f}\n")
 
-    # Construct and return reply Message
+    # Kembalikan metrics ke format awal (tanpa client_id agar tidak dirata-rata aneh lagi oleh server)
     metrics = {
         "eval_loss": eval_loss,
         "eval_acc": eval_acc,

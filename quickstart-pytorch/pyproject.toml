@@ -31,7 +31,8 @@ fraction-evaluate = 1.0
 local-epochs = 5
 learning-rate = 0.0001
 batch-size = 32
-dataset-path = "C:/coolyeah/flwr-test/real_dataset_split"
+kaggle-dataset-path = "C:/coolyeah/flwr-test/dataset_split"
+real-dataset-path = "C:/coolyeah/flwr-test/real_dataset_split"
 data-num-partitions = 3
 proximal-mu = 0.1
 

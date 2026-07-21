@@ -1,16 +1,17 @@
 """pytorchexample: A Flower / PyTorch app."""
 
+import os
+import collections
 from pathlib import Path
 from tqdm import tqdm
 
 import torch
 import torch.nn as nn
 import logging
-from collections import defaultdict
+from collections import defaultdict, Counter
 from flwr.app import ArrayRecord, MetricRecord
-from torch.utils.data import DataLoader, Subset, random_split
+from torch.utils.data import DataLoader, Subset, random_split, ConcatDataset
 from torchvision.datasets import ImageFolder
-from collections import Counter
 from torchvision.transforms import Compose, Normalize, Resize, ToTensor, RandomHorizontalFlip, RandomRotation
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -89,7 +90,6 @@ VAL_TRANSFORMS = Compose([
     Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 ])
 
-# pembagi ke klien, tiap client dapat gambar dari semua kelas (stratified)
 def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partitions: int):
     """Bagi rata isi folder TRAIN ke tiap client."""
     label_to_indices = defaultdict(list)
@@ -99,42 +99,53 @@ def _get_stratified_indices(dataset: ImageFolder, partition_id: int, num_partiti
     client_indices = []
     class_names = dataset.classes
 
-    print(f"\n{'='*70}")
-    print(f"🔍 TRACKING LOAD DATA - CLIENT {partition_id} (DARI FOLDER TRAIN)")
-    print(f"{'='*70}")
-
     for label in sorted(label_to_indices.keys()):
         indices = label_to_indices[label]
         total_class_images = len(indices)
-
         images_per_client = total_class_images // num_partitions
-        
-        # Titik awal (start) dan titik akhir (end) pengambilan gambar
         start = partition_id * images_per_client
-        
         if partition_id == num_partitions - 1:
             end = total_class_images
         else:
             end = start + images_per_client
-
         slice_indices = indices[start:end]
         client_indices.extend(slice_indices)
         
-        print(f"📁 Kelas {class_names[label]:<25} : dapet {len(slice_indices):>4} gambar (Index: {start:>4} s/d {end-1:>4})")
-
-    print(f"{'-'*70}")
-    print(f"✅ TOTAL GAMBAR BELAJAR CLIENT {partition_id} : {len(client_indices)} gambar")
-    print(f"{'='*70}\n")
-
     return client_indices
 
 
-def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_path: str):
-    """Load data Client (Bisa Kaggle atau Real Data)"""
+def print_dataset_summary(client_id, dataset_name, dataset_obj, is_subset=False):
+    """Fungsi untuk menampilkan ringkasan data yang diload secara rapi."""
+    print(f"\n" + "="*55)
+    print(f"📦 [Client {client_id}] Memuat Data: {dataset_name}")
+    
+    if is_subset:
+        client_subset = dataset_obj.dataset
+        base_image_folder = client_subset.dataset
+        
+        classes = base_image_folder.classes
+        
+        # Ambil label dengan melacak index dari 2 lapis Subset tersebut
+        targets = [base_image_folder.targets[client_subset.indices[i]] for i in dataset_obj.indices]
+    else:
+        # Untuk Real Data yang langsung berasal dari ImageFolder
+        classes = dataset_obj.classes
+        targets = dataset_obj.targets
+
+    class_counts = collections.Counter(targets)
+    
+    print("📊 Distribusi Kelas:")
+    for class_idx, count in class_counts.items():
+        print(f"   - {classes[class_idx]}: {count} gambar")
+    print("="*55 + "\n")
+
+
+def load_data(partition_id: int, num_partitions: int, batch_size: int, kaggle_path: str, real_path: str):
+    """Load data Client (Kaggle atau Real Data) dengan Log Transparan"""
     
     if partition_id == 2:
-        real_train_dir = Path("C:/coolyeah/flwr-test/real_dataset_split/train")
-        real_val_dir = Path("C:/coolyeah/flwr-test/real_dataset_split/val")
+        real_train_dir = Path(real_path) / "train"
+        real_val_dir = Path(real_path) / "val"
         
         if not real_train_dir.exists():
             raise FileNotFoundError(f"Folder real data tidak ditemukan: {real_train_dir}")
@@ -142,13 +153,13 @@ def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_p
         train_subset = ImageFolder(root=str(real_train_dir), transform=TRAIN_TRANSFORMS)
         val_subset = ImageFolder(root=str(real_val_dir), transform=VAL_TRANSFORMS)
         
-        print(f"\n[Client {partition_id}] 🌾 Menggunakan REAL DATA: Train={len(train_subset)}, Val={len(val_subset)}\n")
+        print_dataset_summary(partition_id, f"Real Data ({real_train_dir})", train_subset)
         
     else:
-        kaggle_train_dir = Path("C:/coolyeah/flwr-test/dataset_split/train")
+        kaggle_train_dir = Path(kaggle_path) / "train"
         
         if not kaggle_train_dir.exists():
-            raise FileNotFoundError(f"Folder TRAIN tidak ditemukan di: {kaggle_train_dir}! Tolong jalankan split_dataset.py dulu.")
+            raise FileNotFoundError(f"Folder TRAIN tidak ditemukan di: {kaggle_train_dir}")
             
         dataset = ImageFolder(root=str(kaggle_train_dir), transform=TRAIN_TRANSFORMS)
         
@@ -162,28 +173,37 @@ def load_data(partition_id: int, num_partitions: int, batch_size: int, dataset_p
         
         train_subset, val_subset = random_split(client_subset, [train_size, val_size], generator=generator)
 
+        print_dataset_summary(partition_id, f"Kaggle Data ({kaggle_train_dir})", train_subset, is_subset=True)
+
     trainloader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
     testloader = DataLoader(val_subset, batch_size=batch_size)
     
     return trainloader, testloader
 
 
-def load_centralized_dataset(dataset_path: str):
-    """Load data Ujian Server (HANYA DARI FOLDER VAL)"""
+def load_centralized_dataset(kaggle_path: str, real_path: str):
+    """Load data Ujian Server (GABUNGAN KAGGLE + REAL DATA)"""
     
-    # Bikin path dinamis berdasarkan config pyproject.toml
-    val_dir = Path(dataset_path) / "val"
+    kaggle_val_dir = Path(kaggle_path) / "val"
+    real_val_dir = Path(real_path) / "val" 
     
-    if not val_dir.exists():
-        raise FileNotFoundError(f"Folder VAL tidak ditemukan di: {val_dir}! Tolong jalankan split_dataset.py dulu.")
+    if not kaggle_val_dir.exists():
+        raise FileNotFoundError(f"Folder VAL Kaggle tidak ditemukan di: {kaggle_val_dir}")
+    if not real_val_dir.exists():
+        raise FileNotFoundError(f"Folder VAL Real Data tidak ditemukan di: {real_val_dir}")
         
-    dataset = ImageFolder(root=str(val_dir), transform=VAL_TRANSFORMS)
+    kaggle_dataset = ImageFolder(root=str(kaggle_val_dir), transform=VAL_TRANSFORMS)
+    real_dataset = ImageFolder(root=str(real_val_dir), transform=VAL_TRANSFORMS)
     
-    print(f"\n[Centralized] 🎯 Total soal ujian murni untuk Server: {len(dataset)} gambar\n")
-    return DataLoader(dataset, batch_size=128, shuffle=False)
+    combined_dataset = ConcatDataset([kaggle_dataset, real_dataset])
+    
+    print(f"\n[Centralized] 🎯 Total soal ujian murni untuk Server: {len(combined_dataset)} gambar")
+    print(f"    - Dari Kaggle: {len(kaggle_dataset)} gambar")
+    print(f"    - Dari Real Data: {len(real_dataset)} gambar\n")
+    
+    return DataLoader(combined_dataset, batch_size=128, shuffle=False)
 
 
-# traing dan testing tetap di task.py biar bisa dipanggil dari server_app.py
 def _unpack_batch(batch):
     if isinstance(batch, dict):
         return batch["img"], batch["label"]
@@ -195,13 +215,11 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
     net.to(device)
     
     if isinstance(trainloader.dataset, Subset):
-        # Logika untuk Data Kaggle (Nested Subsets)
         base_dataset = trainloader.dataset.dataset.dataset
         client_indices = trainloader.dataset.dataset.indices
         train_indices = trainloader.dataset.indices
         subset_targets = [base_dataset.targets[client_indices[i]] for i in train_indices]
     else:
-        # Logika untuk Real Data (ImageFolder langsung)
         subset_targets = trainloader.dataset.targets
     
     class_counts = Counter(subset_targets)
@@ -211,7 +229,6 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
     weights = weights / weights.sum()
     
     criterion = torch.nn.CrossEntropyLoss(weight=weights.to(device))
-    
     optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=1e-4)
     
     net.train()
@@ -240,7 +257,6 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0, global
             optimizer.step()
             running_loss += loss.item()
             
-            # Hitung Akurasi Train
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
@@ -270,13 +286,13 @@ def test(net, testloader, device):
     return loss, accuracy
 
 
-def global_evaluate(server_round: int, arrays: ArrayRecord, dataset_path: str | None = None) -> MetricRecord:
+def global_evaluate(server_round: int, arrays: ArrayRecord, kaggle_path: str, real_path: str) -> MetricRecord:
     model = Net()
     model.load_state_dict(arrays.to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    test_dataloader = load_centralized_dataset(dataset_path)
+    test_dataloader = load_centralized_dataset(kaggle_path, real_path)
     test_loss, test_acc = test(model, test_dataloader, device)
 
     return MetricRecord({"accuracy": test_acc, "loss": test_loss})
